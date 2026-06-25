@@ -1,1 +1,319 @@
+blueprint:
+  name: Misting Fan - Temperature & Presence Triggered (Dreo)
+  description: >
+    Turns on a misting fan (e.g. Dreo) when a chosen temperature sensor goes
+    above a threshold AND a presence sensor shows someone's home/in the
+    room, setting a specific fan speed (1-12), turning on the misting
+    switch, then waiting an adjustable delay (default 5 seconds) before
+    setting mist/fog level (1-4). Also turns the fan off automatically if
+    presence has been absent for an adjustable amount of time. Turns the
+    fan and misting back off once the temperature drops back to a target
+    value too - but ONLY if this automation was the one that turned it on,
+    so it won't switch off a fan you turned on manually. A presence sensor
+    is REQUIRED for this version - see the other "Misting Fan - Temperature
+    Triggered (Dreo)" blueprint if you don't have one.
+  domain: automation
+  source_url: https://github.com/dreo-team/hass-dreoverse
+  input:
+    temperature_sensor:
+      name: Temperature Sensor
+      description: The sensor to monitor (e.g. a room temperature sensor).
+      selector:
+        entity:
+          domain: sensor
+          device_class: temperature
 
+    fan_entity:
+      name: Fan
+      description: The misting fan entity to control.
+      selector:
+        entity:
+          domain: fan
+
+    mist_level_entity:
+      name: Mist / Fog Level Number Entity
+      description: >
+        The number entity that controls mist/fog level on your Dreo device
+        (e.g. number.misting_fan_fog_level). Found under Developer Tools
+        → States, usually shown as "<your fan name> Fog Level".
+      selector:
+        entity:
+          domain: number
+
+    mist_switch_entity:
+      name: Misting On/Off Switch
+      description: >
+        The switch entity that enables misting itself (e.g.
+        switch.misting_fan_misting). This needs to be turned on BEFORE
+        the fog level number takes effect - the fog level alone does
+        nothing if this switch is off.
+      selector:
+        entity:
+          domain: switch
+
+    tracking_helper:
+      name: "Tracking Helper (input_boolean)"
+      description: >
+        Create a helper toggle first (Settings > Devices & services >
+        Helpers > + Create Helper > Toggle), e.g. "Misting Fan Auto Started".
+        This blueprint uses it to remember whether IT switched the fan on,
+        so it only ever turns the fan back off itself, not a fan you
+        started manually from the app or a physical button.
+      selector:
+        entity:
+          domain: input_boolean
+
+    turn_on_temp:
+      name: Turn ON Temperature
+      description: Fan switches on when the sensor reads at or above this value.
+      default: 24
+      selector:
+        number:
+          min: 0
+          max: 50
+          step: 0.5
+          unit_of_measurement: "°"
+          mode: box
+
+    turn_off_temp:
+      name: Turn OFF Temperature
+      description: >
+        Fan switches off when the sensor drops to or below this value.
+        Set lower than the ON temperature to avoid rapid on/off cycling.
+      default: 21
+      selector:
+        number:
+          min: 0
+          max: 50
+          step: 0.5
+          unit_of_measurement: "°"
+          mode: box
+
+    fan_speed:
+      name: Fan Speed
+      description: Speed level to set when the fan turns on (1-12, depending on model).
+      default: 6
+      selector:
+        number:
+          min: 1
+          max: 12
+          step: 1
+          mode: slider
+
+    mist_level:
+      name: Mist Level
+      description: >
+        Mist/fog level to set when the fan turns on (1 = lowest, 4 = highest),
+        set directly on your device's mist level number entity.
+      default: 2
+      selector:
+        number:
+          min: 1
+          max: 4
+          step: 1
+          mode: slider
+
+    mist_delay_seconds:
+      name: Delay Before Setting Mist Level
+      description: >
+        Wait this many seconds after the fan turns on before setting the
+        mist level - useful if the device needs a moment to fully power up
+        before it accepts the mist/fog command. Set to 0 for no delay.
+      default: 5
+      selector:
+        number:
+          min: 0
+          max: 30
+          step: 1
+          unit_of_measurement: seconds
+          mode: box
+
+    presence_sensor:
+      name: Presence Sensor
+      description: >
+        The fan will only turn on when this sensor is "on"/"home" (e.g. a
+        person, motion, or presence sensor for the room) AND the
+        temperature is above your threshold.
+      selector:
+        entity:
+          domain:
+            - binary_sensor
+            - device_tracker
+            - person
+
+    presence_timeout_minutes:
+      name: Turn Off After No Presence For
+      description: >
+        If the room/person shows no presence for this many minutes while
+        the fan is running, the fan turns off automatically - but only if
+        this automation was the one that turned it on. Set to 0 to disable
+        this check and only rely on the temperature threshold for turning
+        off.
+      default: 15
+      selector:
+        number:
+          min: 0
+          max: 180
+          step: 1
+          unit_of_measurement: minutes
+          mode: box
+
+variables:
+  fan_entity: !input fan_entity
+  mist_level_entity: !input mist_level_entity
+  mist_switch_entity: !input mist_switch_entity
+  mist_level: !input mist_level
+  fan_speed: !input fan_speed
+  presence_sensor: !input presence_sensor
+  presence_timeout_minutes: !input presence_timeout_minutes
+
+trigger:
+  - trigger: numeric_state
+    entity_id: !input temperature_sensor
+    above: !input turn_on_temp
+    id: temp_high
+  - trigger: numeric_state
+    entity_id: !input temperature_sensor
+    below: !input turn_off_temp
+    id: temp_low
+  - trigger: state
+    entity_id: !input fan_entity
+    to: "off"
+    id: fan_turned_off
+  - trigger: state
+    entity_id: !input presence_sensor
+    to:
+      - "off"
+      - "not_home"
+    id: presence_left
+
+condition: []
+
+action:
+  - choose:
+      # --- Temperature reached ON threshold AND presence detected ---
+      - conditions:
+          - condition: trigger
+            id: temp_high
+          - condition: state
+            entity_id: !input presence_sensor
+            state:
+              - "on"
+              - "home"
+        sequence:
+          - action: fan.turn_on
+            target:
+              entity_id: !input fan_entity
+          - action: fan.set_percentage
+            target:
+              entity_id: !input fan_entity
+            data:
+              percentage: "{{ (fan_speed | int) * 100 // 12 }}"
+          - action: switch.turn_on
+            target:
+              entity_id: !input mist_switch_entity
+          - delay:
+              seconds: !input mist_delay_seconds
+          - action: number.set_value
+            target:
+              entity_id: !input mist_level_entity
+            data:
+              value: "{{ mist_level | int }}"
+          - action: input_boolean.turn_on
+            target:
+              entity_id: !input tracking_helper
+          - action: logbook.log
+            data:
+              name: Misting Fan Automation
+              message: >-
+                turned ON {{ fan_entity }} at speed {{ fan_speed }} / mist
+                {{ mist_level }} because temperature exceeded the set threshold.
+              entity_id: !input fan_entity
+
+      # --- Temperature dropped to OFF threshold ---
+      # Only turns the fan off if THIS automation was the one that turned
+      # it on (tracked via the input_boolean helper above), so a fan you
+      # switched on manually is left alone.
+      - conditions:
+          - condition: trigger
+            id: temp_low
+          - condition: state
+            entity_id: !input fan_entity
+            state: "on"
+          - condition: state
+            entity_id: !input tracking_helper
+            state: "on"
+        sequence:
+          - action: fan.turn_off
+            target:
+              entity_id: !input fan_entity
+          - action: switch.turn_off
+            target:
+              entity_id: !input mist_switch_entity
+          - action: input_boolean.turn_off
+            target:
+              entity_id: !input tracking_helper
+          - action: logbook.log
+            data:
+              name: Misting Fan Automation
+              message: >-
+                turned OFF {{ fan_entity }} because temperature dropped to
+                the set threshold (fan was switched on by this automation).
+              entity_id: !input fan_entity
+
+      # --- Fan switched off (by anyone/anything) ---
+      # Always reset the tracker when the fan goes off, so a stale "on"
+      # flag never causes a later manual start to get auto-stopped.
+      - conditions:
+          - condition: trigger
+            id: fan_turned_off
+        sequence:
+          - action: input_boolean.turn_off
+            target:
+              entity_id: !input tracking_helper
+
+      # --- No presence detected ---
+      # Waits out the configured timeout, then re-checks that presence is
+      # STILL absent (so someone coming back during the wait correctly
+      # cancels the shutoff) before turning the fan off. Only acts if this
+      # automation was the one that turned the fan on, and only if the
+      # timeout is actually enabled (> 0 minutes).
+      - conditions:
+          - condition: trigger
+            id: presence_left
+          - condition: template
+            value_template: "{{ (presence_timeout_minutes | int) > 0 }}"
+        sequence:
+          - delay:
+              minutes: "{{ presence_timeout_minutes | int }}"
+          - condition: state
+            entity_id: !input presence_sensor
+            state:
+              - "off"
+              - "not_home"
+          - condition: state
+            entity_id: !input fan_entity
+            state: "on"
+          - condition: state
+            entity_id: !input tracking_helper
+            state: "on"
+          - action: fan.turn_off
+            target:
+              entity_id: !input fan_entity
+          - action: switch.turn_off
+            target:
+              entity_id: !input mist_switch_entity
+          - action: input_boolean.turn_off
+            target:
+              entity_id: !input tracking_helper
+          - action: logbook.log
+            data:
+              name: Misting Fan Automation
+              message: >-
+                turned OFF {{ fan_entity }} because no presence was detected
+                for {{ presence_timeout_minutes }} minutes (fan was switched
+                on by this automation).
+              entity_id: !input fan_entity
+
+mode: parallel
+max: 10
