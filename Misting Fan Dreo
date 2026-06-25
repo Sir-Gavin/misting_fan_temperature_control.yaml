@@ -2,11 +2,11 @@ blueprint:
   name: Misting Fan - Temperature Triggered (Dreo)
   description: >
     Turns on a misting fan (e.g. Dreo) when a chosen temperature sensor goes
-    above a threshold, setting a specific fan speed (1-12) and mist level
-    (1-4, applied via the device's humidifier entity). Turns the fan back
-    off once the temperature drops back to a target value - but ONLY if
-    this automation was the one that turned it on, so it won't switch off
-    a fan you turned on manually.
+    above a threshold, setting a specific fan speed (1-12) and mist/fog
+    level (1-4, applied via the device's mist level number entity). Turns
+    the fan back off once the temperature drops back to a target value -
+    but ONLY if this automation was the one that turned it on, so it won't
+    switch off a fan you turned on manually.
   domain: automation
   source_url: https://github.com/dreo-team/hass-dreoverse
   input:
@@ -25,15 +25,15 @@ blueprint:
         entity:
           domain: fan
 
-    humidifier_entity:
-      name: Mist / Humidifier Entity
+    mist_level_entity:
+      name: Mist / Fog Level Number Entity
       description: >
-        The humidifier entity for mist control (Dreo evaporative coolers
-        and humidifiers expose mist level through HA's humidifier domain,
-        e.g. humidifier.xxx).
+        The number entity that controls mist/fog level on your Dreo device
+        (e.g. number.misting_fan_fog_level). Found under Developer Tools
+        → States, usually shown as "<your fan name> Fog Level".
       selector:
         entity:
-          domain: humidifier
+          domain: number
 
     tracking_helper:
       name: "Tracking Helper (input_boolean)"
@@ -87,22 +87,19 @@ blueprint:
     mist_level:
       name: Mist Level
       description: >
-        Mist level to set when the fan turns on (1 = lowest, 4 = highest).
-        This is mapped onto your humidifier entity's actual min/max
-        humidity range, split into 4 even steps, since Dreo's mist levels
-        are exposed in HA as a humidity percentage target.
+        Mist/fog level to set when the fan turns on (1 = lowest, 4 = highest),
+        set directly on your device's mist level number entity.
       default: 2
       selector:
-        select:
-          options:
-            - "1"
-            - "2"
-            - "3"
-            - "4"
+        number:
+          min: 1
+          max: 4
+          step: 1
+          mode: slider
 
 variables:
   fan_entity: !input fan_entity
-  humidifier_entity: !input humidifier_entity
+  mist_level_entity: !input mist_level_entity
   mist_level: !input mist_level
   fan_speed: !input fan_speed
 
@@ -137,18 +134,11 @@ action:
               entity_id: !input fan_entity
             data:
               percentage: "{{ (fan_speed | int) * 100 // 12 }}"
-          - action: humidifier.turn_on
+          - action: number.set_value
             target:
-              entity_id: !input humidifier_entity
-          - action: humidifier.set_humidity
-            target:
-              entity_id: !input humidifier_entity
+              entity_id: !input mist_level_entity
             data:
-              humidity: >-
-                {% set lo = state_attr(humidifier_entity, 'min_humidity') | float(30) %}
-                {% set hi = state_attr(humidifier_entity, 'max_humidity') | float(90) %}
-                {% set step = (hi - lo) / 3 %}
-                {{ (lo + step * ((mist_level | int) - 1)) | round(0) }}
+              value: "{{ mist_level | int }}"
           - action: input_boolean.turn_on
             target:
               entity_id: !input tracking_helper
@@ -177,9 +167,6 @@ action:
           - action: fan.turn_off
             target:
               entity_id: !input fan_entity
-          - action: humidifier.turn_off
-            target:
-              entity_id: !input humidifier_entity
           - action: input_boolean.turn_off
             target:
               entity_id: !input tracking_helper
