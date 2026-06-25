@@ -2,10 +2,11 @@ blueprint:
   name: Misting Fan - Temperature Triggered (Dreo)
   description: >
     Turns on a misting fan (e.g. Dreo) when a chosen temperature sensor goes
-    above a threshold, setting a specific fan speed (1-12) and mist/fog
-    level (1-4, applied via the device's mist level number entity). Turns
-    the fan back off once the temperature drops back to a target value -
-    but ONLY if this automation was the one that turned it on, so it won't
+    above a threshold, setting a specific fan speed (1-12), then waiting an
+    adjustable delay (default 5 seconds) before setting mist/fog level
+    (1-4, applied via the device's mist level number entity). Turns the
+    fan back off once the temperature drops back to a target value - but
+    ONLY if this automation was the one that turned it on, so it won't
     switch off a fan you turned on manually.
   domain: automation
   source_url: https://github.com/dreo-team/hass-dreoverse
@@ -97,6 +98,21 @@ blueprint:
           step: 1
           mode: slider
 
+    mist_delay_seconds:
+      name: Delay Before Setting Mist Level
+      description: >
+        Wait this many seconds after the fan turns on before setting the
+        mist level - useful if the device needs a moment to fully power up
+        before it accepts the mist/fog command. Set to 0 for no delay.
+      default: 5
+      selector:
+        number:
+          min: 0
+          max: 30
+          step: 1
+          unit_of_measurement: seconds
+          mode: box
+
 variables:
   fan_entity: !input fan_entity
   mist_level_entity: !input mist_level_entity
@@ -134,6 +150,8 @@ action:
               entity_id: !input fan_entity
             data:
               percentage: "{{ (fan_speed | int) * 100 // 12 }}"
+          - delay:
+              seconds: !input mist_delay_seconds
           - action: number.set_value
             target:
               entity_id: !input mist_level_entity
