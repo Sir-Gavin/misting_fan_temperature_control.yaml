@@ -30,9 +30,7 @@ blueprint:
       description: >
         The humidifier entity for mist control (Dreo evaporative coolers
         and humidifiers expose mist level through HA's humidifier domain,
-        e.g. humidifier.xxx). Optional - leave blank if your fan has no
-        separate humidifier entity.
-      default: ""
+        e.g. humidifier.xxx).
       selector:
         entity:
           domain: humidifier
@@ -139,22 +137,18 @@ action:
               entity_id: !input fan_entity
             data:
               percentage: "{{ (fan_speed | int) * 100 // 12 }}"
-          - if:
-              - condition: template
-                value_template: "{{ humidifier_entity not in ['', none] }}"
-            then:
-              - action: humidifier.turn_on
-                target:
-                  entity_id: !input humidifier_entity
-              - action: humidifier.set_humidity
-                target:
-                  entity_id: !input humidifier_entity
-                data:
-                  humidity: >-
-                    {% set lo = state_attr(humidifier_entity, 'min_humidity') | float(30) %}
-                    {% set hi = state_attr(humidifier_entity, 'max_humidity') | float(90) %}
-                    {% set step = (hi - lo) / 3 %}
-                    {{ (lo + step * ((mist_level | int) - 1)) | round(0) }}
+          - action: humidifier.turn_on
+            target:
+              entity_id: !input humidifier_entity
+          - action: humidifier.set_humidity
+            target:
+              entity_id: !input humidifier_entity
+            data:
+              humidity: >-
+                {% set lo = state_attr(humidifier_entity, 'min_humidity') | float(30) %}
+                {% set hi = state_attr(humidifier_entity, 'max_humidity') | float(90) %}
+                {% set step = (hi - lo) / 3 %}
+                {{ (lo + step * ((mist_level | int) - 1)) | round(0) }}
           - action: input_boolean.turn_on
             target:
               entity_id: !input tracking_helper
@@ -183,13 +177,9 @@ action:
           - action: fan.turn_off
             target:
               entity_id: !input fan_entity
-          - if:
-              - condition: template
-                value_template: "{{ humidifier_entity not in ['', none] }}"
-            then:
-              - action: humidifier.turn_off
-                target:
-                  entity_id: !input humidifier_entity
+          - action: humidifier.turn_off
+            target:
+              entity_id: !input humidifier_entity
           - action: input_boolean.turn_off
             target:
               entity_id: !input tracking_helper
