@@ -4,10 +4,12 @@ blueprint:
     Turns on a misting fan (e.g. Dreo) when a chosen temperature sensor goes
     above a threshold, setting a specific fan speed (1-12), turning on the
     misting switch, then waiting an adjustable delay (default 5 seconds)
-    before setting mist/fog level (1-4). Turns the fan and misting back off
-    once the temperature drops back to a target value - but ONLY if this
-    automation was the one that turned it on, so it won't switch off a fan
-    you turned on manually.
+    before setting mist/fog level (1-4). Optionally only turns on if a
+    presence sensor shows someone's home/in the room - leave blank to skip
+    this check entirely. Turns the fan and misting back off once the
+    temperature drops back to a target value - but ONLY if this automation
+    was the one that turned it on, so it won't switch off a fan you turned
+    on manually.
   domain: automation
   source_url: https://github.com/dreo-team/hass-dreoverse
   input:
@@ -124,12 +126,28 @@ blueprint:
           unit_of_measurement: seconds
           mode: box
 
+    presence_sensor:
+      name: Presence Sensor (optional)
+      description: >
+        Optional - if set, the fan will only turn on when this sensor is
+        "on"/"home" (e.g. a person, motion, or presence sensor for the
+        room). Leave blank to ignore presence entirely and run on
+        temperature alone.
+      default: ""
+      selector:
+        entity:
+          domain:
+            - binary_sensor
+            - device_tracker
+            - person
+
 variables:
   fan_entity: !input fan_entity
   mist_level_entity: !input mist_level_entity
   mist_switch_entity: !input mist_switch_entity
   mist_level: !input mist_level
   fan_speed: !input fan_speed
+  presence_sensor: !input presence_sensor
 
 trigger:
   - trigger: numeric_state
@@ -153,6 +171,11 @@ action:
       - conditions:
           - condition: trigger
             id: temp_high
+          - condition: template
+            value_template: >-
+              {{ presence_sensor in ['', none] or
+                 is_state(presence_sensor, 'on') or
+                 is_state(presence_sensor, 'home') }}
         sequence:
           - action: fan.turn_on
             target:
