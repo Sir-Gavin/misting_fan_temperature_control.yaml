@@ -1,0 +1,215 @@
+blueprint:
+  name: Misting Fan - Temperature Triggered (Dreo)
+  description: >
+    Turns on a misting fan (e.g. Dreo) when a chosen temperature sensor goes
+    above a threshold, setting a specific fan speed (1-12) and mist level
+    (1-4, applied via the device's humidifier entity). Turns the fan back
+    off once the temperature drops back to a target value - but ONLY if
+    this automation was the one that turned it on, so it won't switch off
+    a fan you turned on manually.
+  domain: automation
+  source_url: https://github.com/dreo-team/hass-dreoverse
+  input:
+    temperature_sensor:
+      name: Temperature Sensor
+      description: The sensor to monitor (e.g. a room temperature sensor).
+      selector:
+        entity:
+          domain: sensor
+          device_class: temperature
+
+    fan_entity:
+      name: Fan
+      description: The misting fan entity to control.
+      selector:
+        entity:
+          domain: fan
+
+    humidifier_entity:
+      name: Mist / Humidifier Entity
+      description: >
+        The humidifier entity for mist control (Dreo evaporative coolers
+        and humidifiers expose mist level through HA's humidifier domain,
+        e.g. humidifier.xxx). Optional - leave blank if your fan has no
+        separate humidifier entity.
+      default: ""
+      selector:
+        entity:
+          domain: humidifier
+
+    tracking_helper:
+      name: "Tracking Helper (input_boolean)"
+      description: >
+        Create a helper toggle first (Settings > Devices & services >
+        Helpers > + Create Helper > Toggle), e.g. "Misting Fan Auto Started".
+        This blueprint uses it to remember whether IT switched the fan on,
+        so it only ever turns the fan back off itself, not a fan you
+        started manually from the app or a physical button.
+      selector:
+        entity:
+          domain: input_boolean
+
+    turn_on_temp:
+      name: Turn ON Temperature
+      description: Fan switches on when the sensor reads at or above this value.
+      default: 24
+      selector:
+        number:
+          min: 0
+          max: 50
+          step: 0.5
+          unit_of_measurement: "°"
+          mode: box
+
+    turn_off_temp:
+      name: Turn OFF Temperature
+      description: >
+        Fan switches off when the sensor drops to or below this value.
+        Set lower than the ON temperature to avoid rapid on/off cycling.
+      default: 21
+      selector:
+        number:
+          min: 0
+          max: 50
+          step: 0.5
+          unit_of_measurement: "°"
+          mode: box
+
+    fan_speed:
+      name: Fan Speed
+      description: Speed level to set when the fan turns on (1-12, depending on model).
+      default: 6
+      selector:
+        number:
+          min: 1
+          max: 12
+          step: 1
+          mode: slider
+
+    mist_level:
+      name: Mist Level
+      description: >
+        Mist level to set when the fan turns on (1 = lowest, 4 = highest).
+        This is mapped onto your humidifier entity's actual min/max
+        humidity range, split into 4 even steps, since Dreo's mist levels
+        are exposed in HA as a humidity percentage target.
+      default: 2
+      selector:
+        select:
+          options:
+            - "1"
+            - "2"
+            - "3"
+            - "4"
+
+variables:
+  fan_entity: !input fan_entity
+  humidifier_entity: !input humidifier_entity
+  mist_level: !input mist_level
+  fan_speed: !input fan_speed
+
+trigger:
+  - trigger: numeric_state
+    entity_id: !input temperature_sensor
+    above: !input turn_on_temp
+    id: temp_high
+  - trigger: numeric_state
+    entity_id: !input temperature_sensor
+    below: !input turn_off_temp
+    id: temp_low
+  - trigger: state
+    entity_id: !input fan_entity
+    to: "off"
+    id: fan_turned_off
+
+condition: []
+
+action:
+  - choose:
+      # --- Temperature reached ON threshold ---
+      - conditions:
+          - condition: trigger
+            id: temp_high
+        sequence:
+          - action: fan.turn_on
+            target:
+              entity_id: !input fan_entity
+          - action: fan.set_percentage
+            target:
+              entity_id: !input fan_entity
+            data:
+              percentage: "{{ (fan_speed | int) * 100 // 12 }}"
+          - if:
+              - condition: template
+                value_template: "{{ humidifier_entity not in ['', none] }}"
+            then:
+              - action: humidifier.turn_on
+                target:
+                  entity_id: !input humidifier_entity
+              - action: humidifier.set_humidity
+                target:
+                  entity_id: !input humidifier_entity
+                data:
+                  humidity: >-
+                    {% set lo = state_attr(humidifier_entity, 'min_humidity') | float(30) %}
+                    {% set hi = state_attr(humidifier_entity, 'max_humidity') | float(90) %}
+                    {% set step = (hi - lo) / 3 %}
+                    {{ (lo + step * ((mist_level | int) - 1)) | round(0) }}
+          - action: input_boolean.turn_on
+            target:
+              entity_id: !input tracking_helper
+          - action: logbook.log
+            data:
+              name: Misting Fan Automation
+              message: >-
+                turned ON {{ fan_entity }} at speed {{ fan_speed }} / mist
+                {{ mist_level }} because temperature exceeded the set threshold.
+              entity_id: !input fan_entity
+
+      # --- Temperature dropped to OFF threshold ---
+      # Only turns the fan off if THIS automation was the one that turned
+      # it on (tracked via the input_boolean helper above), so a fan you
+      # switched on manually is left alone.
+      - conditions:
+          - condition: trigger
+            id: temp_low
+          - condition: state
+            entity_id: !input fan_entity
+            state: "on"
+          - condition: state
+            entity_id: !input tracking_helper
+            state: "on"
+        sequence:
+          - action: fan.turn_off
+            target:
+              entity_id: !input fan_entity
+          - if:
+              - condition: template
+                value_template: "{{ humidifier_entity not in ['', none] }}"
+            then:
+              - action: humidifier.turn_off
+                target:
+                  entity_id: !input humidifier_entity
+          - action: input_boolean.turn_off
+            target:
+              entity_id: !input tracking_helper
+          - action: logbook.log
+            data:
+              name: Misting Fan Automation
+              message: >-
+                turned OFF {{ fan_entity }} because temperature dropped to
+                the set threshold (fan was switched on by this automation).
+              entity_id: !input fan_entity
+
+      # --- Fan switched off (by anyone/anything) ---
+      # Always reset the tracker when the fan goes off, so a stale "on"
+      # flag never causes a later manual start to get auto-stopped.
+      - conditions:
+          - condition: trigger
+            id: fan_turned_off
+        sequence:
+          - action: input_boolean.turn_off
+            target:
+              entity_id: !input tracking_helper
+
+mode: single
